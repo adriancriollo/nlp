@@ -22,6 +22,9 @@ from nltk.metrics import precision, recall, f_measure, accuracy
 import matplotlib.pyplot as plt
 # so that we can indicate a function in a type hint
 from typing import Callable
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score
+
 nltk.download('punkt')
 
 def generate_tuples_from_file(training_file_path: str) -> list:
@@ -68,7 +71,7 @@ def get_prfa(dev_y: list, preds: list, verbose=False) -> tuple:
     """
     Calculate precision, recall, f1, and accuracy for a given set of predictions and labels.
     Args:
-        dev_y: list of labels
+        dev_y: list of true labels
         preds: list of predictions
         verbose: whether to print the metrics
     Returns:
@@ -76,19 +79,47 @@ def get_prfa(dev_y: list, preds: list, verbose=False) -> tuple:
     """
     refsets = {}
     testsets = {}
+
+    # Loop through true labels and predictions
     for i in range(len(dev_y)):
         label = dev_y[i]
         pred = preds[i]
+        
+        # Initialize sets for refsets and testsets if necessary
         if label not in refsets:
             refsets[label] = set()
-        refsets[label].add(i)
         if pred not in testsets:
             testsets[pred] = set()
+        
+        # Add index i to the correct label in refsets and testsets
+        refsets[label].add(i)
         testsets[pred].add(i)
-    precision_score = precision(refsets, testsets)
-    recall_score = recall(refsets, testsets)
-    f1_score = f_measure(refsets, testsets)
+
+    # Initialize cumulative metrics
+    precision_score = recall_score = f1_score = 0.0
+    label_count = len(refsets)
+
+    # Calculate precision, recall, f1 for each label
+    for label in refsets:
+        if label in testsets:
+            precision_score += precision(refsets[label], testsets[label]) or 0.0
+            recall_score += recall(refsets[label], testsets[label]) or 0.0
+            f1_score += f_measure(refsets[label], testsets[label]) or 0.0
+
+    # Calculate average precision, recall, and f1 over all labels
+    precision_score /= label_count
+    recall_score /= label_count
+    f1_score /= label_count
+
+    # Calculate accuracy
     accuracy_score = accuracy(dev_y, preds)
+
+    if verbose:
+        print(f"Precision: {precision_score}")
+        print(f"Recall: {recall_score}")
+        print(f"F1 Score: {f1_score}")
+        print(f"Accuracy: {accuracy_score}")
+
     return precision_score, recall_score, f1_score, accuracy_score
 
 def create_training_graph(metrics_fun: Callable, train_feats: list, dev_feats: list, kind: str, savepath: str = None, verbose: bool = False) -> None:
@@ -102,11 +133,122 @@ def create_training_graph(metrics_fun: Callable, train_feats: list, dev_feats: l
         savepath: the path to save the graph to (if None, the graph will not be saved)
         verbose: whether to print the metrics
     """
-    #TODO: implement this function
+    # Data percentages to evaluate the model with
+    data_percentages = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+    
+    # Lists to store metrics for each percentage
+    precisions = []
+    recalls = []
+    f1_scores = []
+    accuracies = []
+    
+    # Loop through different percentages of the training data
+    for percent in data_percentages:
+        # Determine the subset of training data to use
+        data_size = int(len(train_feats) * (percent / 100))
+        current_train_data = train_feats[:data_size]
+        
+        # Call the provided metrics function to get precision, recall, f1, and accuracy
+        precision_score, recall_score, f1_score, accuracy_score = metrics_fun(current_train_data, dev_feats)
+        
+        # Append the results to the respective lists
+        precisions.append(precision_score)
+        recalls.append(recall_score)
+        f1_scores.append(f1_score)
+        accuracies.append(accuracy_score)
+        
+        # Optionally print the metrics for each percentage of data
+        if verbose:
+            print(f"Training data percentage: {percent}%")
+            print(f"Precision: {precision_score:.4f}, Recall: {recall_score:.4f}, F1 Score: {f1_score:.4f}, Accuracy: {accuracy_score:.4f}\n")
+    
+    # Plotting the results
+    plt.figure(figsize=(10, 6))
+    
+    # Plot precision, recall, f1, and accuracy
+    plt.plot(data_percentages, precisions, label='Precision', marker='o')
+    plt.plot(data_percentages, recalls, label='Recall', marker='o')
+    plt.plot(data_percentages, f1_scores, label='F1 Score', marker='o')
+    plt.plot(data_percentages, accuracies, label='Accuracy', marker='o')
+    
+    # Add title and labels
+    plt.title(f'{kind} Classifier Performance on Dev Set as a Function of Training Data')
+    plt.xlabel('Training Data Percentage (%)')
+    plt.ylabel('Performance')
+    plt.legend(loc='best')
+    
+    # Add grid for better readability
+    plt.grid(True)
+    
+    # Save the graph if a savepath is provided
+    if savepath:
+        plt.savefig(savepath)
+        if verbose:
+            print(f"Graph saved to {savepath}")
+    
+    # Show the plot
+    plt.show()
     pass
 
-
-
+# Helper function to train and evaluate the Naive Bayes classifier
+def nb_metrics_fun(train_feats, dev_feats):
+    """
+    Train a Naive Bayes classifier and evaluate it on the dev set.
+    
+    Args:
+        train_feats: List of training data [(features, label), ...]
+        dev_feats: List of dev data [(features, label), ...]
+        
+    Returns:
+        tuple: (precision, recall, f1, accuracy)
+    """
+    # Train the Naive Bayes classifier
+    classifier = nltk.NaiveBayesClassifier.train(train_feats)
+    
+    # Get the dev data features and true labels
+    dev_data = [feats for feats, label in dev_feats]
+    dev_labels = [label for feats, label in dev_feats]
+    
+    # Make predictions on the dev set
+    dev_preds = [classifier.classify(feats) for feats in dev_data]
+    
+    # Evaluate the model using the get_prfa helper function
+    precision_score, recall_score, f1_score, accuracy_score = get_prfa(dev_labels, dev_preds)
+    
+    return precision_score, recall_score, f1_score, accuracy_score
+def logistic_regression_metrics_fun(train_feats, dev_feats):
+    """
+    Train a Logistic Regression model and evaluate it on the dev set.
+    
+    Args:
+        train_feats: List of training data [(features, label), ...]
+        dev_feats: List of dev data [(features, label), ...]
+        
+    Returns:
+        tuple: (precision, recall, f1, accuracy)
+    """
+    # Extract features and labels from the training data
+    X_train = [feats for feats, label in train_feats]
+    y_train = [label for feats, label in train_feats]
+    
+    # Extract features and labels from the dev data
+    X_dev = [feats for feats, label in dev_feats]
+    y_dev = [label for feats, label in dev_feats]
+    
+    # Train the Logistic Regression model
+    model = LogisticRegression(max_iter=200)  # You can adjust max_iter as needed
+    model.fit(X_train, y_train)
+    
+    # Make predictions on the dev set
+    y_pred = model.predict(X_dev)
+    
+    # Calculate precision, recall, f1, and accuracy
+    precision = precision_score(y_dev, y_pred, average='binary')
+    recall = recall_score(y_dev, y_pred, average='binary')
+    f1 = f1_score(y_dev, y_pred, average='binary')
+    accuracy = accuracy_score(y_dev, y_pred)
+    
+    return precision, recall, f1, accuracy
 def create_index(all_train_data_X: list) -> list:
     """
     Given the training data, create a list of all the words in the training data.

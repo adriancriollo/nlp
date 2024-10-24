@@ -1,6 +1,7 @@
 from collections import Counter
 import numpy as np
 import math
+import random
 
 """
 CS 4120, Fall 2024
@@ -26,7 +27,7 @@ def create_ngrams(tokens: list, n: int) -> list:
       list: list of tuples of strings, each tuple being one of the individual n-grams
     """
     tupleList = []
-    for i in range(len(tokens) - n):
+    for i in range(len(tokens) - n + 1):
         tupleList.append(tuple((tokens[i : i + n])))
     return tupleList
 
@@ -133,11 +134,12 @@ class LanguageModel:
         Args:
           n_gram (int): the n-gram order of the language model to create
         """
-        self.ngram_dict = {}
-        self.ngram_probabilities = {}
-        self.ngram_num = n_gram
+        self.n_gram_num = n_gram
+        self.ngram_dict = Counter()
+        self.context_dict = Counter()
+        self.vocab = set()
 
-    def train(self, tokens: list, verbose: bool = False) -> None:
+    def train(self, tokens: list, verbose: bool = True) -> None:
         """Trains the language model on the given data. Assumes that the given data
         has tokens that are white-space separated, has one sentence per line, and
         that the sentences begin with <s> and end with </s>
@@ -145,23 +147,38 @@ class LanguageModel:
           tokens (list): tokenized data to be trained on as a single list
           verbose (bool): default value False, to be used to turn on/off debugging prints
         """
-        ngrams = create_ngrams(tokens, self.ngram_num)
-        self.ngram_dict = Counter(ngrams)
-        single_occurence = []
-        for ngram in self.ngram_dict:
-            if self.ngram_dict[ngram] == 1:
-                single_occurence.append(ngram)
-        for occurence in single_occurence:
-            del self.ngram_dict[occurence]
-            self.ngram_dict["<UNK>"] += 1 if "<UNK>" in self.ngram_dict else 1
+        for token in tokens:
+            self.vocab.add(token)
+        ngrams = create_ngrams(tokens, self.n_gram_num)
+        for ngram in ngrams:
+            self.ngram_dict[ngram] += 1
+            context = ngram[:-1]
+            self.context_dict[context] += 1
+        allTokensCount = Counter(tokens)
+        single_occurence_tokens = []
+        for token in allTokensCount:
+            if allTokensCount[token] == 1:
+                single_occurence_tokens.append(token)
+        if len(single_occurence_tokens) > 0:
+            self.vocab.add(UNK)
+        for token in single_occurence_tokens:
+            self.vocab.remove(token)
+        updated_ngram_dict = Counter()
+        updated_context_dict = Counter()
+        for ngram, count in self.ngram_dict.items():
+            updated_ngram = tuple(
+                UNK if token in single_occurence_tokens else token for token in ngram
+            )
+            updated_ngram_dict[updated_ngram] += count
+            context_replaced = updated_ngram[:-1]
+            updated_context_dict[context_replaced] += count
 
-        total_ngrams = sum(self.ngram_dict.values()) + len(self.ngram_dict)
-        # Probability with laplace smoothing
-        for ngram in self.ngram_dict:
-            self.ngram_probabilities[ngram] = (
-                self.ngram_dict[ngram] + 1
-            ) / total_ngrams
-        pass
+        self.ngram_dict = updated_ngram_dict
+        self.context_dict = updated_context_dict
+
+        # print(f"Vocab: {self.vocab}")
+        # print(f"Ngram_dict: {self.ngram_dict}")
+        # print(f"Context_dict: {self.context_dict}")
 
     def score(self, sentence_tokens: list) -> float:
         """Calculates the probability score for a given string representing a single sequence of tokens.
@@ -171,15 +188,23 @@ class LanguageModel:
         Returns:
           float: the probability value of the given tokens for this model
         """
-        sentence_probability = 1
-        sentence_ngrams = create_ngrams(sentence_tokens, self.ngram_num)
-        total_ngrams = sum(self.ngram_dict.values()) + len(self.ngram_dict)
-        for token in sentence_ngrams:
-            if token in self.ngram_probabilities:
-                sentence_probability *= self.ngram_probabilities[token]
+        updated_sentence_tokens = []
+        for token in sentence_tokens:
+            if token in self.vocab:
+                updated_sentence_tokens.append(token)
             else:
-                sentence_probability *= 1 / total_ngrams
-        return sentence_probability
+                updated_sentence_tokens.append(UNK)
+
+        ngrams = create_ngrams(updated_sentence_tokens, self.n_gram_num)
+        vocab_size = len(self.vocab)
+        sentence_probabilty = 1
+        for ngram in ngrams:
+            ngram_count = self.ngram_dict[ngram]
+            context = ngram[:-1]
+            context_count = self.context_dict[context]
+            probability = (ngram_count + 1) / (context_count + vocab_size)
+            sentence_probabilty *= probability
+        return sentence_probabilty
 
     def generate_sentence(self) -> list:
         """Generates a single sentence from a trained language model using the Shannon technique.
@@ -187,14 +212,29 @@ class LanguageModel:
         Returns:
           list: the generated sentence as a list of tokens
         """
-        sentence = ["<s>"]
+        sentence = ["<s>"] * (self.n_gram_num - 1)
+
         while True:
-            context = tuple(sentence[-(self.ngram_num - 1) :])
-            next_token = self.sample_next_token(context)
-            sentence.append(next_token)
-            if next_token == "</s>":
+            context = tuple(sentence[-(self.n_gram_num - 1) :])
+
+            possibleChoices = []
+            for ngram, count in self.ngram_dict.items():
+                if ngram[:-1] == context:
+                    possibleChoices.append((ngram[-1], count))
+
+            total_count = 0
+            for choice in possibleChoices:
+                total_count += choice[1]
+            if total_count == 0:
                 break
-        return sentence[1:-1]
+
+            possibleTokens = [token for token, _ in possibleChoices]
+            tokenWeights = [count / total_count for _, count in possibleChoices]
+            next_word = random.choices(possibleTokens, weights=tokenWeights)[0]
+            sentence.append(next_word)
+            if next_word == "</s>":
+                break
+        return sentence
 
     def generate(self, n: int) -> list:
         """Generates n sentences from a trained language model using the Shannon technique.
@@ -207,22 +247,6 @@ class LanguageModel:
         # PROVIDED
         return [self.generate_sentence() for i in range(n)]
 
-    def sample_next_token(self, context):
-        # Get all possible next tokens given the context
-        possible_next_tokens = {
-            ngram[-1]: prob
-            for ngram, prob in self.ngram_probabilities.items()
-            if ngram[:-1] == context
-        }
-
-        # Sample based on the probabilities of possible next tokens
-        next_token = random.choices(
-            list(possible_next_tokens.keys()),
-            weights=list(possible_next_tokens.values()),
-        )[0]
-
-        return next_token
-
     def perplexity(self, sequence: list) -> float:
         """Calculates the perplexity score for a given sequence of tokens.
         Args:
@@ -232,7 +256,11 @@ class LanguageModel:
           float: the perplexity value of the given sequence for this model
         """
         # STUDENTS IMPLEMENT
-        pass
+        sentence_probability = self.score(sequence)
+        N = len(sequence)
+        if sentence_probability == 0:
+            return float("inf")
+        return (1 / sentence_probability) ** (1 / N)
 
 
 # not required
