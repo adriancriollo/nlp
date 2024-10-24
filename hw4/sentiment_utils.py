@@ -17,6 +17,7 @@ Add any functions to this file that you think will be useful to you in multiple 
 from collections import defaultdict, Counter
 # for tokenizing and precision, recall, f_measure, and accuracy functions
 import nltk
+from nltk.metrics import precision, recall, f_measure, accuracy
 # for plotting
 import matplotlib.pyplot as plt
 # so that we can indicate a function in a type hint
@@ -73,8 +74,22 @@ def get_prfa(dev_y: list, preds: list, verbose=False) -> tuple:
     Returns:
         tuple of precision, recall, f1, and accuracy
     """
-    #TODO: implement this function
-    pass
+    refsets = {}
+    testsets = {}
+    for i in range(len(dev_y)):
+        label = dev_y[i]
+        pred = preds[i]
+        if label not in refsets:
+            refsets[label] = set()
+        refsets[label].add(i)
+        if pred not in testsets:
+            testsets[pred] = set()
+        testsets[pred].add(i)
+    precision_score = precision(refsets, testsets)
+    recall_score = recall(refsets, testsets)
+    f1_score = f_measure(refsets, testsets)
+    accuracy_score = accuracy(dev_y, preds)
+    return precision_score, recall_score, f1_score, accuracy_score
 
 def create_training_graph(metrics_fun: Callable, train_feats: list, dev_feats: list, kind: str, savepath: str = None, verbose: bool = False) -> None:
     """
